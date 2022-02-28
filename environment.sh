@@ -1,0 +1,3 @@
+export UPDATE_INFRASTRUCTURE_RG_NAME=update-d07-is
+export UPDATED_VMS_RG_NAME=update-d07-vm
+export LOCATION=northeurope

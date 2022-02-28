@@ -1,0 +1,186 @@
+{
+    "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+      "workspaceName": {
+        "type": "string",
+        "metadata": {
+          "description": "Workspace name"
+        }
+      },
+      "sku": {
+        "type": "string",
+        "defaultValue": "pergb2018",
+        "allowedValues": [
+          "pergb2018",
+          "Free",
+          "Standalone",
+          "PerNode",
+          "Standard",
+          "Premium"
+        ],
+        "metadata": {
+          "description": "Pricing tier: perGB2018 or legacy tiers (Free, Standalone, PerNode, Standard or Premium), which are not available to all customers."
+        }
+      },
+      "dataRetention": {
+        "type": "int",
+        "defaultValue": 30,
+        "minValue": 7,
+        "maxValue": 730,
+        "metadata": {
+          "description": "Number of days to retain data."
+        }
+      },
+      "location": {
+        "type": "string",
+        "defaultValue": "[resourceGroup().location]",
+        "metadata": {
+          "description": "Specifies the location in which to create the workspace."
+        }
+      },
+      "automationAccountName": {
+        "type": "string",
+        "metadata": {
+          "description": "Automation account name"
+        }
+      },
+      "updatedVmsRgName": {
+        "type": "string"
+      },
+      "_CurrentDateTimeInTicks": {
+        "type": "string",
+        "defaultValue": "[utcNow('u')]"
+      }
+    },
+    "variables": {
+      "Updates": {
+        "name": "[concat('Updates', '(', parameters('workspaceName'), ')')]",
+        "galleryName": "Updates"
+      },
+      "scheduleStart": "[dateTimeAdd(parameters('_CurrentDateTimeInTicks'), 'PT30M', 'yyyy-MM-ddTHH:mm:sszzzz')]"
+    },
+    "resources": [
+      {
+        "type": "Microsoft.OperationalInsights/workspaces",
+        "apiVersion": "2020-08-01",
+        "name": "[parameters('workspaceName')]",
+        "location": "[parameters('location')]",
+        "properties": {
+          "sku": {
+            "name": "[parameters('sku')]"
+          },
+          "retentionInDays": "[parameters('dataRetention')]",
+          "features": {
+            "searchVersion": 1,
+            "legacy": 0
+          }
+        }
+      },
+      {
+          "apiVersion": "2015-11-01-preview",
+          "location": "[parameters('location')]",
+          "name": "[variables('Updates').name]",
+          "type": "Microsoft.OperationsManagement/solutions",
+          "id": "[concat('/subscriptions/', subscription().subscriptionId, '/resourceGroups/', resourceGroup().name, '/providers/Microsoft.OperationsManagement/solutions/', variables('Updates').name)]",
+          "dependsOn": [
+              "[concat('Microsoft.OperationalInsights/workspaces/', parameters('workspaceName'))]"
+          ],
+          "properties": {
+              "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces/', parameters('workspaceName'))]"
+          },
+          "plan": {
+              "name": "[variables('Updates').name]",
+              "publisher": "Microsoft",
+              "promotionCode": "",
+              "product": "[concat('OMSGallery/', variables('Updates').galleryName)]"
+          }
+      },
+      {
+        "type": "Microsoft.Automation/automationAccounts",
+        "apiVersion": "2020-01-13-preview",
+        "name": "[parameters('automationAccountName')]",
+        "location": "[parameters('location')]",
+        "dependsOn": [
+          "[parameters('workspaceName')]"
+        ],
+        "identity": {
+          "type": "SystemAssigned"
+        },
+        "properties": {
+          "sku": {
+            "name": "Basic"
+          }
+        },
+        "resources": [
+          {
+            "type": "schedules",
+            "apiVersion": "2020-01-13-preview",
+            "name": "linux-update-schedule",
+            "dependsOn": [
+                "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+            ],
+            "properties": {
+                "startTime": "[variables('scheduleStart')]",
+                "expiryTime": "9999-12-31T23:59:59.9999999+00:00",
+                "interval": 1,
+                "frequency": "Day"
+            }
+          }
+          
+        ]
+      },
+      {
+        "type": "Microsoft.OperationalInsights/workspaces/linkedServices",
+        "apiVersion": "2020-08-01",
+        "name": "[concat(parameters('workspaceName'), '/' , 'Automation')]",
+        "location": "[parameters('location')]",
+        "dependsOn": [
+          "[parameters('workspaceName')]",
+          "[parameters('automationAccountName')]"
+        ],
+        "properties": {
+          "resourceId": "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+        }
+      },
+      {
+        "type": "Microsoft.Automation/automationAccounts/softwareUpdateConfigurations",
+        "apiVersion": "2019-06-01",
+        "name": "[concat(parameters('automationAccountName'), '/linux-update')]",
+        "dependsOn": [
+            "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+        ],
+        "properties": {
+            "updateConfiguration": {
+                "operatingSystem": "Linux",
+                "linux": {
+                    "includedPackageClassifications": "Critical, Security, Other",
+                    "rebootSetting": "IfRequired"
+                },
+                "targets": {
+                    "azureQueries": [
+                        {
+                            "scope": [
+                                "[concat('/subscriptions/',subscription().subscriptionId ,'/resourcegroups/', parameters('updatedVmsRgName'))]"
+                            ],
+                            "tagSettings": {
+                                "tags": {},
+                                "filterOperator": "All"
+                            },
+                            "locations": []
+                        }
+                    ]
+                },
+                "duration": "PT2H"
+            },
+            "tasks": {},
+            "scheduleInfo": {
+                "startTime": "[variables('scheduleStart')]",
+                "isEnabled": true,
+                "interval": 1,
+                "frequency": "Day"
+              }
+        }
+      }
+    ]
+  }

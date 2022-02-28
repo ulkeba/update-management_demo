@@ -1,0 +1,229 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "instanceCount": {
+      "type": "int",
+      "defaultValue": 2,
+      "maxValue": 10,
+      "metadata": {
+        "description": "Specify the number of VMs to create"
+      }
+    },
+    "vmNamePrefix": {
+      "type": "string",
+      "defaultValue": "VM",
+      "metadata": {
+        "description": "Assing a prefix for the VMs you will create"
+      }
+    },
+    "platform": {
+      "type": "string",
+      "defaultValue": "WinSrv",
+      "allowedValues": [
+        "WinSrv",
+        "Linux"
+      ],
+      "metadata": {
+        "description": "Select the OS type to deploy"
+      }
+    },
+    "username": {
+      "type": "string",
+      "defaultValue": "azureadmin",
+      "metadata": {
+        "description": "User name for the OS."
+      }
+    },
+    "pwdOrSsh": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Provide pwd if WinSrv, SSH if Linux."
+      }
+    },
+    "omsResourceGroup": {
+      "type": "string",
+      "metadata": {
+        "description": "Specify name of Resource Group containing the mgmt services"
+      }
+    },
+    "omsWorkspaceName": {
+      "type": "string",
+      "metadata": {
+        "description": "Specify the name of your OMS workspace"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources."
+      }
+    },
+    "_CurrentDateTimeInTicks": {
+      "type": "string",
+      "defaultValue": "[utcNow('yyyy-MM-dd')]"
+    }
+  },
+  "variables": {
+    "vNetName": "[concat(parameters('vmNamePrefix'), 'vnet')]",
+    "vNetAddressPrefix": "192.168.0.0/16",
+    "subnetName": "subnet01",
+    "subnetAddressPrefix": "192.168.0.0/24",
+    "subnetRef": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vNetName'),  variables('subnetName'))]",
+    "windowsOffer": "WindowsServer",
+    "windowsSku": "2016-Datacenter",
+    "windowsPublisher": "MicrosoftWindowsServer",
+    "linuxOffer": "0001-com-ubuntu-server-focal",
+    "linuxSku": "20_04-lts-gen2",
+    "linuxPublisher": "canonical",
+    "windowsMgmtType": "MicrosoftMonitoringAgent",
+    "windowsMgmtVersion": "1.0",
+    "linuxMgmtType": "OmsAgentForLinux",
+    "linuxMgmtVersion": "1.4",
+    "UniqueStringBasedOnTimeStamp": "[uniqueString(deployment().name, parameters('_CurrentDateTimeInTicks'))]"
+  },
+  "resources": [
+    {
+      "apiVersion": "2021-05-01",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "name": "[concat(parameters('vmNamePrefix'), 'ip', copyIndex())]",
+      "location": "[parameters('location')]",
+      "copy": {
+        "name": "[concat(parameters('vmNamePrefix'), 'ip')]",
+        "count": "[parameters('instancecount')]"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Dynamic",
+        "dnsSettings": {
+          "domainNameLabel": "[toLower(concat(parameters('vmNamePrefix'), 'VM', copyIndex()))]"
+        }
+      }
+    },
+    {
+      "apiVersion": "2021-05-01",
+      "type": "Microsoft.Network/virtualNetworks",
+      "name": "[variables('vNetName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('vNetAddressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('subnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('subnetAddressPrefix')]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2021-05-01",
+      "type": "Microsoft.Network/networkInterfaces",
+      "name": "[concat(parameters('vmNamePrefix'), 'nic', copyIndex())]",
+      "location": "[parameters('location')]",
+      "copy": {
+        "name": "[concat(parameters('vmNamePrefix'), 'nic')]",
+        "count": "[parameters('instanceCount')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Network/publicIPAddresses/', parameters('vmNamePrefix'), 'ip', copyIndex())]",
+        "[concat('Microsoft.Network/virtualNetworks/', variables('vNetName'))]"
+      ],
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', concat(parameters('vmNamePrefix'), 'ip', copyIndex()))]"
+              },
+              "subnet": {
+                "id": "[variables('subnetRef')]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2021-11-01",
+      "type": "Microsoft.Compute/virtualMachines",
+      "name": "[concat(parameters('vmNamePrefix'), parameters('platform'), copyIndex())]",
+      "location": "[parameters('location')]",
+      "copy": {
+        "name": "[concat(parameters('vmNamePrefix'))]",
+        "count": "[parameters('instanceCount')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Network/networkinterfaces/', parameters('vmNamePrefix'), 'nic', copyIndex())]"
+      ],
+      "properties": {
+        "hardwareprofile": {
+          "vmsize": "Standard_D2s_v3"
+        },
+        "osProfile": {
+          "computerName": "[concat(parameters('vmNamePrefix'), parameters('platform'), copyIndex())]",
+          "adminusername": "[parameters('username')]",
+          "adminpassword": "[parameters('pwdOrSsh')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[if(equals(parameters('platform'), 'WinSrv'), variables('windowsPublisher'), variables('linuxPublisher'))]",
+            "offer": "[if(equals(parameters('platform'), 'WinSrv'), variables('windowsOffer'), variables('linuxOffer'))]",
+            "version": "latest",
+            "sku": "[if(equals(parameters('platform'), 'WinSrv'), variables('windowsSku'), variables('linuxSku'))]"
+          },
+          "osdisk": {
+            "name": "[concat(parameters('vmNamePrefix'), 'os', copyIndex())]",
+            "createOption": "FromImage",
+            "managedDisk": {
+              "storageAccountType": "StandardSSD_LRS"
+            },
+            "caching": "ReadWrite"
+          }
+        },
+        "networkprofile": {
+          "networkinterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkinterfaces', concat(parameters('vmNamePrefix'),'nic', copyIndex()))]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(parameters('vmNamePrefix'), parameters('platform'), copyIndex(), '/OMS')]",
+      "location": "[parameters('location')]",
+      "copy": {
+        "name": "[concat(parameters('vmNamePrefix'), parameters('platform'), 'OMS')]",
+        "count": "[parameters('instanceCount')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Compute/virtualMachines/', parameters('vmNamePrefix'), parameters('platform'), copyIndex())]"
+      ],
+      "properties": {
+        "publisher": "Microsoft.EnterpriseCloud.Monitoring",
+        "type": "[if(equals(parameters('platform'), 'WinSrv'), variables('windowsMgmtType'), variables('linuxMgmtType'))]",
+        "typeHandlerVersion": "[if(equals(parameters('platform'), 'WinSrv'), variables('windowsMgmtVersion'), variables('linuxMgmtVersion'))]",
+        "autoUpgradeMinorVersion": true,
+        "settings": {
+          "workspaceId": "[reference(resourceId(parameters('omsResourceGroup'), 'Microsoft.OperationalInsights/workspaces/', parameters('omsWorkspaceName')), '2015-11-01-preview').customerId]",
+          "azureResourceId": "[resourceId('Microsoft.Compute/virtualMachines/', concat(parameters('vmNamePrefix'), parameters('platform'), copyIndex()))]"
+        },
+        "protectedSettings": {
+          "workspaceKey": "[listKeys(resourceId(parameters('omsResourceGroup'),'Microsoft.OperationalInsights/workspaces/', parameters('omsWorkspaceName')), '2015-11-01-preview').primarySharedKey]"
+        }
+      }
+    }
+  ],
+  "outputs": {}
+}
+
